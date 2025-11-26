@@ -15,7 +15,16 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // Initialize SQLite database
-const db = new sqlite3.Database(':memory:'); // Use ':memory:' for Render, or 'monitor.db' for persistent storage
+// For Render: Use file-based database (persists during service lifetime)
+// Note: On free tier, data may be lost if service is stopped for extended period
+// For production, use PostgreSQL (see instructions below)
+const db = new sqlite3.Database('monitor.db', (err) => {
+  if (err) {
+    console.error('Error opening database:', err);
+  } else {
+    console.log('Database connected');
+  }
+});
 
 // Create tables
 db.serialize(() => {
@@ -63,6 +72,13 @@ app.post('/api/status', (req, res) => {
   );
   stmt.finalize();
   
+  // Check if device was offline and just came back online
+  db.get(`SELECT status FROM devices WHERE device_id = ?`, [data.device_id || 'unknown'], (err, device) => {
+    if (!err && device && device.status === 'offline') {
+      console.log(`✅ Device ${data.device_id} came back ONLINE at ${new Date().toISOString()}`);
+    }
+  });
+  
   // Update device record
   const deviceStmt = db.prepare(`INSERT OR REPLACE INTO devices 
     (device_id, last_seen, status) VALUES (?, CURRENT_TIMESTAMP, ?)`);
@@ -83,12 +99,19 @@ app.get('/api/status', (req, res) => {
       return res.json({ status: 'offline', message: 'No device data' });
     }
     
-    // Check if device is online (seen in last 2 minutes)
+    // Check if device is online (seen in last 1 minute)
     const lastSeen = new Date(device.last_seen);
     const now = new Date();
     const minutesSinceLastSeen = (now - lastSeen) / 1000 / 60;
     
-    const isOnline = minutesSinceLastSeen < 2;
+    const isOnline = minutesSinceLastSeen < 1;
+    
+    // Log offline event if device just went offline
+    if (!isOnline && device.status === 'online') {
+      console.log(`⚠️ Device ${device.device_id} went OFFLINE at ${now.toISOString()}`);
+      // Update device status to offline
+      db.run(`UPDATE devices SET status = 'offline' WHERE device_id = ?`, [device.device_id]);
+    }
     
     // Get latest status update
     db.get(`SELECT * FROM status_updates 
@@ -120,7 +143,28 @@ app.get('/api/history', (req, res) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
-    res.json(rows);
+    // Add offline markers between gaps
+    const processedRows = [];
+    for (let i = 0; i < rows.length; i++) {
+      processedRows.push(rows[i]);
+      if (i < rows.length - 1) {
+        const current = new Date(rows[i].server_timestamp);
+        const next = new Date(rows[i + 1].server_timestamp);
+        const gapMinutes = (current - next) / 1000 / 60;
+        
+        // If gap is more than 1 minute, add offline marker
+        if (gapMinutes > 1) {
+          processedRows.push({
+            id: `offline_${i}`,
+            device_id: rows[i].device_id,
+            status: 'offline',
+            server_timestamp: new Date(current.getTime() - gapMinutes * 60 * 1000 / 2).toISOString(),
+            is_offline_marker: true
+          });
+        }
+      }
+    }
+    res.json(processedRows.reverse()); // Reverse to show chronological order
   });
 });
 
