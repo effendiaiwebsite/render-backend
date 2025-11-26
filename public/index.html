@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Status Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .status-card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .status-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-dot.online {
+            background: #10b981;
+        }
+        
+        .status-dot.offline {
+            background: #ef4444;
+            animation: none;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .status-text {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        
+        .status-text.online {
+            color: #10b981;
+        }
+        
+        .status-text.offline {
+            color: #ef4444;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .info-item {
+            padding: 15px;
+            background: #f3f4f6;
+            border-radius: 10px;
+        }
+        
+        .info-label {
+            font-size: 0.9em;
+            color: #6b7280;
+            margin-bottom: 5px;
+        }
+        
+        .info-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #1f2937;
+        }
+        
+        .history-card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .history-card h2 {
+            margin-bottom: 20px;
+            color: #1f2937;
+        }
+        
+        .history-item {
+            padding: 15px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .history-item:last-child {
+            border-bottom: none;
+        }
+        
+        .history-time {
+            color: #6b7280;
+            font-size: 0.9em;
+        }
+        
+        .history-status {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        
+        .history-status.online {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .history-status.offline {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #6b7280;
+        }
+        
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📡 ESP32 Status Monitor</h1>
+            <p>Real-time device monitoring dashboard</p>
+        </div>
+        
+        <div id="error-container"></div>
+        
+        <div class="status-card">
+            <div class="status-indicator">
+                <div id="status-dot" class="status-dot offline"></div>
+                <div id="status-text" class="status-text offline">OFFLINE</div>
+            </div>
+            
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Last Seen</div>
+                    <div id="last-seen" class="info-value">Never</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Time Since Last Update</div>
+                    <div id="time-since" class="info-value">--</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Uptime</div>
+                    <div id="uptime" class="info-value">--</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">IP Address</div>
+                    <div id="ip-address" class="info-value">--</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Signal Strength</div>
+                    <div id="rssi" class="info-value">--</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Free Memory</div>
+                    <div id="free-heap" class="info-value">--</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="history-card">
+            <h2>Recent Activity</h2>
+            <div id="history-container">
+                <div class="loading">Loading history...</div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let updateInterval;
+        
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                updateUI(data);
+                document.getElementById('error-container').innerHTML = '';
+            } catch (error) {
+                console.error('Error fetching status:', error);
+                document.getElementById('error-container').innerHTML = 
+                    '<div class="error">Error connecting to server. Make sure your ESP32 is sending updates.</div>';
+            }
+        }
+        
+        function updateUI(data) {
+            const statusDot = document.getElementById('status-dot');
+            const statusText = document.getElementById('status-text');
+            
+            if (data.status === 'online') {
+                statusDot.className = 'status-dot online';
+                statusText.className = 'status-text online';
+                statusText.textContent = 'ONLINE';
+            } else {
+                statusDot.className = 'status-dot offline';
+                statusText.className = 'status-text offline';
+                statusText.textContent = 'OFFLINE';
+            }
+            
+            document.getElementById('last-seen').textContent = 
+                data.last_seen ? new Date(data.last_seen).toLocaleString() : 'Never';
+            
+            document.getElementById('time-since').textContent = 
+                data.minutes_since_last_seen !== undefined 
+                    ? `${data.minutes_since_last_seen.toFixed(1)} minutes ago`
+                    : '--';
+            
+            if (data.latest_update) {
+                document.getElementById('uptime').textContent = 
+                    data.latest_update.uptime_formatted || '--';
+                document.getElementById('ip-address').textContent = 
+                    data.latest_update.ip_address || '--';
+                document.getElementById('rssi').textContent = 
+                    data.latest_update.rssi ? `${data.latest_update.rssi} dBm` : '--';
+                document.getElementById('free-heap').textContent = 
+                    data.latest_update.free_heap ? `${(data.latest_update.free_heap / 1024).toFixed(1)} KB` : '--';
+            }
+        }
+        
+        async function fetchHistory() {
+            try {
+                const response = await fetch('/api/history?limit=20');
+                const history = await response.json();
+                
+                const container = document.getElementById('history-container');
+                
+                if (history.length === 0) {
+                    container.innerHTML = '<div class="loading">No history available yet</div>';
+                    return;
+                }
+                
+                container.innerHTML = history.map(item => {
+                    const date = new Date(item.server_timestamp);
+                    const isBoot = item.is_boot === 1;
+                    return `
+                        <div class="history-item">
+                            <div>
+                                <div class="history-time">${date.toLocaleString()}</div>
+                                <div>${isBoot ? '🔄 Device Booted' : '📡 Status Update'} | Uptime: ${item.uptime_formatted || 'N/A'}</div>
+                            </div>
+                            <div class="history-status ${item.status}">${item.status.toUpperCase()}</div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Error fetching history:', error);
+            }
+        }
+        
+        // Initial load
+        fetchStatus();
+        fetchHistory();
+        
+        // Update every 5 seconds
+        updateInterval = setInterval(() => {
+            fetchStatus();
+            fetchHistory();
+        }, 5000);
+    </script>
+</body>
+</html>
+
