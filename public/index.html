@@ -115,6 +115,8 @@
             border-radius: 15px;
             padding: 30px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: flex;
+            flex-direction: column;
         }
         
         .history-card h2 {
@@ -267,9 +269,12 @@
         }
         
         #history-container {
-            max-height: 600px;
-            overflow-y: auto;
+            height: 600px !important;
+            max-height: 600px !important;
+            overflow-y: auto !important;
+            overflow-x: hidden;
             scroll-behavior: smooth;
+            flex-shrink: 0;
         }
         
         #history-container::-webkit-scrollbar {
@@ -579,7 +584,9 @@
         
         async function fetchHistory() {
             try {
-                const response = await fetch('/api/history?limit=500');
+                // Add cache-busting parameter to ensure fresh data
+                const cacheBuster = new Date().getTime();
+                const response = await fetch(`/api/history?limit=500&_=${cacheBuster}`);
                 const history = await response.json();
                 
                 const container = document.getElementById('history-container');
@@ -597,6 +604,12 @@
                 
                 console.log('Fetched history:', history.length, 'items');
                 
+                // Log the most recent entry timestamp for debugging
+                if (history.length > 0) {
+                    const mostRecent = history[history.length - 1];
+                    console.log('Most recent entry:', mostRecent.server_timestamp, 'Current time:', new Date().toISOString());
+                }
+                
                 // Store full history for slider
                 fullHistory = history;
                 
@@ -613,8 +626,12 @@
                 setTimeout(() => {
                     const container = document.getElementById('history-container');
                     if (container) {
-                        container.scrollTop = 0; // Most recent is at top after reverse()
-                        updateScrollPosition();
+                        // Only auto-scroll if slider is at 100% (Latest)
+                        const slider = document.getElementById('history-slider');
+                        if (slider && parseInt(slider.value) === 100) {
+                            container.scrollTop = 0; // Most recent is at top after reverse()
+                            updateScrollPosition();
+                        }
                     }
                 }, 100);
                     // Fix timezone - ensure proper conversion to local time
