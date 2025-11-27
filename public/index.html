@@ -297,18 +297,27 @@
                     maintainAspectRatio: false,
                     scales: {
                         y: {
-                            min: 0,
-                            max: 1,
+                            min: -0.1,
+                            max: 1.1,
                             ticks: {
                                 stepSize: 1,
                                 callback: function(value) {
-                                    return value === 1 ? 'Online' : 'Offline';
+                                    if (value === 1) return 'Online';
+                                    if (value === 0) return 'Offline';
+                                    return '';
                                 }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
                             }
                         },
                         x: {
                             ticks: {
-                                maxTicksLimit: 12
+                                maxTicksLimit: 24,
+                                autoSkip: true
+                            },
+                            grid: {
+                                display: false
                             }
                         }
                     },
@@ -392,18 +401,26 @@
         
         async function fetchHistory() {
             try {
-                const response = await fetch('/api/history?limit=100');
+                const response = await fetch('/api/history?limit=200');
                 const history = await response.json();
                 
                 const container = document.getElementById('history-container');
                 
                 if (history.length === 0) {
                     container.innerHTML = '<div class="loading">No history available yet</div>';
+                    if (statusChart) {
+                        // Show empty chart
+                        statusChart.data.labels = [];
+                        statusChart.data.datasets[0].data = [];
+                        statusChart.update();
+                    }
                     return;
                 }
                 
-                // Update chart with history data
-                updateChart(history);
+                console.log('Fetched history:', history.length, 'items');
+                
+                // Update chart with history data (await to ensure current status is fetched)
+                updateChart(history).catch(err => console.error('Chart update error:', err));
                 
                 // Detect offline events
                 detectOfflineEvents(history);
@@ -439,75 +456,116 @@
             }
         }
         
-        function updateChart(history) {
+        async function updateChart(history) {
             if (!statusChart) {
                 console.error('Chart not initialized');
                 return;
             }
             
             try {
+                if (!history || history.length === 0) {
+                    console.log('No history data for chart');
+                    return;
+                }
+                
+                // Get current status
+                let currentStatusIsOffline = false;
+                try {
+                    const statusResponse = await fetch('/api/status');
+                    const statusData = await statusResponse.json();
+                    currentStatusIsOffline = statusData.status === 'offline';
+                } catch (e) {
+                    console.error('Error fetching current status:', e);
+                }
+                
                 // Get last 24 hours of data
                 const now = new Date();
                 const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
                 
-                // Filter and process data - convert timestamps properly
+                // Filter and process data
                 const recentHistory = history.filter(item => {
                     if (!item.server_timestamp) return false;
-                    const itemTime = item.server_timestamp + (item.server_timestamp.includes('Z') ? '' : 'Z');
-                    const itemDate = new Date(itemTime);
-                    return itemDate >= oneDayAgo;
+                    try {
+                        const itemTime = item.server_timestamp.includes('Z') ? item.server_timestamp : item.server_timestamp + 'Z';
+                        const itemDate = new Date(itemTime);
+                        return !isNaN(itemDate.getTime()) && itemDate >= oneDayAgo;
+                    } catch (e) {
+                        return false;
+                    }
                 });
                 
-                // Create time buckets (every hour for last 24 hours)
+                console.log('Recent history for chart:', recentHistory.length, 'items');
+                
+                // Create time buckets (every 30 minutes for last 24 hours = 48 points)
                 const labels = [];
                 const data = [];
-                const onlineData = [];
-                const offlineData = [];
+                const colors = [];
                 
-                for (let i = 23; i >= 0; i--) {
-                    const time = new Date(now - i * 60 * 60 * 1000);
-                    const hourLabel = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    labels.push(hourLabel);
+                for (let i = 47; i >= 0; i--) {
+                    const time = new Date(now - i * 30 * 60 * 1000); // 30 minute intervals
+                    const timeLabel = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    labels.push(timeLabel);
                     
-                    // Check if there's online data in this hour
-                    const hourStart = new Date(time);
-                    hourStart.setMinutes(0, 0, 0);
-                    const hourEnd = new Date(hourStart);
-                    hourEnd.setHours(hourEnd.getHours() + 1);
+                    // Check if there's data in this 30-minute window
+                    const windowStart = new Date(time);
+                    windowStart.setSeconds(0, 0);
+                    const windowEnd = new Date(windowStart);
+                    windowEnd.setMinutes(windowEnd.getMinutes() + 30);
                     
-                    let hasOnlineData = false;
-                    let hasOfflineMarker = false;
+                    let status = null;
                     
-                    recentHistory.forEach(item => {
-                        if (!item.server_timestamp) return;
-                        const itemTime = item.server_timestamp + (item.server_timestamp.includes('Z') ? '' : 'Z');
-                        const itemDate = new Date(itemTime);
-                        
-                        if (itemDate >= hourStart && itemDate < hourEnd) {
-                            if (item.is_offline_marker || item.status === 'offline') {
-                                hasOfflineMarker = true;
-                            } else if (item.status === 'online') {
-                                hasOnlineData = true;
+                    // Check recent history for this time window
+                    for (const item of recentHistory) {
+                        if (!item.server_timestamp) continue;
+                        try {
+                            const itemTime = item.server_timestamp.includes('Z') ? item.server_timestamp : item.server_timestamp + 'Z';
+                            const itemDate = new Date(itemTime);
+                            
+                            if (!isNaN(itemDate.getTime()) && itemDate >= windowStart && itemDate < windowEnd) {
+                                if (item.is_offline_marker || item.status === 'offline') {
+                                    status = 0; // Offline
+                                    break;
+                                } else if (item.status === 'online') {
+                                    status = 1; // Online
+                                    break;
+                                }
                             }
+                        } catch (e) {
+                            // Skip invalid dates
                         }
-                    });
+                    }
                     
-                    // Determine status: 1 = online, 0 = offline
-                    const status = hasOnlineData ? 1 : (hasOfflineMarker ? 0 : (i === 23 ? 0 : null));
+                    // For the most recent window, use current status
+                    if (status === null && i === 0) {
+                        status = currentStatusIsOffline ? 0 : 1;
+                    }
+                    
+                    // If still no data, mark oldest periods as offline
+                    if (status === null) {
+                        status = (i >= 45) ? 0 : 0.5; // 0.5 = unknown/gray
+                    }
+                    
                     data.push(status);
+                    
+                    // Set color based on status
+                    if (status === 1) {
+                        colors.push('rgba(16, 185, 129, 0.4)'); // Green for online
+                    } else if (status === 0) {
+                        colors.push('rgba(239, 68, 68, 0.4)'); // Red for offline
+                    } else {
+                        colors.push('rgba(156, 163, 175, 0.2)'); // Gray for unknown
+                    }
                 }
                 
-                // Update chart with proper colors
+                // Update chart
                 statusChart.data.labels = labels;
                 statusChart.data.datasets[0].data = data;
+                statusChart.data.datasets[0].backgroundColor = colors;
                 statusChart.data.datasets[0].borderColor = '#10b981';
-                statusChart.data.datasets[0].backgroundColor = (ctx) => {
-                    const value = ctx.parsed.y;
-                    if (value === 1) return 'rgba(16, 185, 129, 0.3)'; // Green for online
-                    if (value === 0) return 'rgba(239, 68, 68, 0.3)'; // Red for offline
-                    return 'rgba(156, 163, 175, 0.1)'; // Gray for unknown
-                };
-                statusChart.update('none');
+                statusChart.update();
+                
+                const validDataPoints = data.filter(d => d !== null && d !== 0.5).length;
+                console.log('Chart updated with', validDataPoints, 'valid data points out of', data.length);
             } catch (error) {
                 console.error('Error updating chart:', error);
             }
