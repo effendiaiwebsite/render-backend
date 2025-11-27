@@ -186,6 +186,11 @@
         .chart-wrapper {
             position: relative;
             height: 300px;
+            min-height: 300px;
+        }
+        
+        #statusChart {
+            max-height: 300px;
         }
         
         .offline-log {
@@ -351,10 +356,22 @@
                 statusText.textContent = 'OFFLINE';
             }
             
-            // Format time in local timezone
-            const lastSeenDate = data.last_seen ? new Date(data.last_seen) : null;
+            // Format time in local timezone - ensure proper conversion
+            let lastSeenDate = null;
+            if (data.last_seen) {
+                // Ensure proper timezone conversion
+                lastSeenDate = new Date(data.last_seen + (data.last_seen.includes('Z') ? '' : 'Z'));
+            }
             document.getElementById('last-seen').textContent = 
-                lastSeenDate ? lastSeenDate.toLocaleString() : 'Never';
+                lastSeenDate ? lastSeenDate.toLocaleString(undefined, {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true
+                }) : 'Never';
             
             document.getElementById('time-since').textContent = 
                 data.minutes_since_last_seen !== undefined 
@@ -393,15 +410,27 @@
                 
                 // Display recent history
                 container.innerHTML = history.slice(0, 20).map(item => {
-                    const date = new Date(item.server_timestamp);
+                    // Fix timezone - ensure proper conversion to local time
+                    const serverTime = item.server_timestamp;
+                    const date = new Date(serverTime + (serverTime.includes('Z') ? '' : 'Z'));
+                    const localTime = date.toLocaleString(undefined, {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true
+                    });
                     const isBoot = item.is_boot === 1;
+                    const isOfflineMarker = item.is_offline_marker;
                     return `
                         <div class="history-item">
                             <div>
-                                <div class="history-time">${date.toLocaleString()}</div>
-                                <div>${isBoot ? '🔄 Device Booted' : '📡 Status Update'} | Uptime: ${item.uptime_formatted || 'N/A'}</div>
+                                <div class="history-time">${localTime}</div>
+                                <div>${isOfflineMarker ? '⚠️ Device Offline' : isBoot ? '🔄 Device Booted' : '📡 Status Update'} | Uptime: ${item.uptime_formatted || 'N/A'}</div>
                             </div>
-                            <div class="history-status ${item.status}">${item.status.toUpperCase()}</div>
+                            <div class="history-status ${item.status || 'offline'}">${(item.status || 'offline').toUpperCase()}</div>
                         </div>
                     `;
                 }).join('');
@@ -411,58 +440,94 @@
         }
         
         function updateChart(history) {
-            if (!statusChart) return;
-            
-            // Get last 24 hours of data
-            const now = new Date();
-            const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
-            
-            // Filter and process data
-            const recentHistory = history.filter(item => {
-                const itemDate = new Date(item.server_timestamp);
-                return itemDate >= oneDayAgo;
-            }).reverse();
-            
-            // Create time buckets (every 5 minutes)
-            const labels = [];
-            const data = [];
-            const bucketSize = 5 * 60 * 1000; // 5 minutes in milliseconds
-            
-            for (let i = 23; i >= 0; i--) {
-                const time = new Date(now - i * 60 * 60 * 1000);
-                labels.push(time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-                
-                // Check if there's data in this hour
-                const hourStart = new Date(time);
-                hourStart.setMinutes(0, 0, 0);
-                const hourEnd = new Date(hourStart);
-                hourEnd.setHours(hourEnd.getHours() + 1);
-                
-                const hasData = recentHistory.some(item => {
-                    const itemDate = new Date(item.server_timestamp);
-                    return itemDate >= hourStart && itemDate < hourEnd;
-                });
-                
-                data.push(hasData ? 1 : 0);
+            if (!statusChart) {
+                console.error('Chart not initialized');
+                return;
             }
             
-            statusChart.data.labels = labels;
-            statusChart.data.datasets[0].data = data;
-            statusChart.update('none');
+            try {
+                // Get last 24 hours of data
+                const now = new Date();
+                const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+                
+                // Filter and process data - convert timestamps properly
+                const recentHistory = history.filter(item => {
+                    if (!item.server_timestamp) return false;
+                    const itemTime = item.server_timestamp + (item.server_timestamp.includes('Z') ? '' : 'Z');
+                    const itemDate = new Date(itemTime);
+                    return itemDate >= oneDayAgo;
+                });
+                
+                // Create time buckets (every hour for last 24 hours)
+                const labels = [];
+                const data = [];
+                const onlineData = [];
+                const offlineData = [];
+                
+                for (let i = 23; i >= 0; i--) {
+                    const time = new Date(now - i * 60 * 60 * 1000);
+                    const hourLabel = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    labels.push(hourLabel);
+                    
+                    // Check if there's online data in this hour
+                    const hourStart = new Date(time);
+                    hourStart.setMinutes(0, 0, 0);
+                    const hourEnd = new Date(hourStart);
+                    hourEnd.setHours(hourEnd.getHours() + 1);
+                    
+                    let hasOnlineData = false;
+                    let hasOfflineMarker = false;
+                    
+                    recentHistory.forEach(item => {
+                        if (!item.server_timestamp) return;
+                        const itemTime = item.server_timestamp + (item.server_timestamp.includes('Z') ? '' : 'Z');
+                        const itemDate = new Date(itemTime);
+                        
+                        if (itemDate >= hourStart && itemDate < hourEnd) {
+                            if (item.is_offline_marker || item.status === 'offline') {
+                                hasOfflineMarker = true;
+                            } else if (item.status === 'online') {
+                                hasOnlineData = true;
+                            }
+                        }
+                    });
+                    
+                    // Determine status: 1 = online, 0 = offline
+                    const status = hasOnlineData ? 1 : (hasOfflineMarker ? 0 : (i === 23 ? 0 : null));
+                    data.push(status);
+                }
+                
+                // Update chart with proper colors
+                statusChart.data.labels = labels;
+                statusChart.data.datasets[0].data = data;
+                statusChart.data.datasets[0].borderColor = '#10b981';
+                statusChart.data.datasets[0].backgroundColor = (ctx) => {
+                    const value = ctx.parsed.y;
+                    if (value === 1) return 'rgba(16, 185, 129, 0.3)'; // Green for online
+                    if (value === 0) return 'rgba(239, 68, 68, 0.3)'; // Red for offline
+                    return 'rgba(156, 163, 175, 0.1)'; // Gray for unknown
+                };
+                statusChart.update('none');
+            } catch (error) {
+                console.error('Error updating chart:', error);
+            }
         }
         
         function detectOfflineEvents(history) {
             const offlineEvents = [];
-            let lastOnlineTime = null;
             
-            // Sort by timestamp
-            const sortedHistory = [...history].sort((a, b) => 
-                new Date(a.server_timestamp) - new Date(b.server_timestamp)
-            );
+            // Sort by timestamp - fix timezone conversion
+            const sortedHistory = [...history].sort((a, b) => {
+                const timeA = a.server_timestamp + (a.server_timestamp.includes('Z') ? '' : 'Z');
+                const timeB = b.server_timestamp + (b.server_timestamp.includes('Z') ? '' : 'Z');
+                return new Date(timeA) - new Date(timeB);
+            });
             
             for (let i = 0; i < sortedHistory.length - 1; i++) {
-                const current = new Date(sortedHistory[i].server_timestamp);
-                const next = new Date(sortedHistory[i + 1].server_timestamp);
+                const currentTime = sortedHistory[i].server_timestamp + (sortedHistory[i].server_timestamp.includes('Z') ? '' : 'Z');
+                const nextTime = sortedHistory[i + 1].server_timestamp + (sortedHistory[i + 1].server_timestamp.includes('Z') ? '' : 'Z');
+                const current = new Date(currentTime);
+                const next = new Date(nextTime);
                 const gapMinutes = (next - current) / 1000 / 60;
                 
                 // If gap is more than 1 minute, it's an offline period
@@ -482,11 +547,30 @@
             if (offlineEvents.length > 0) {
                 card.style.display = 'block';
                 container.innerHTML = offlineEvents.slice(-10).reverse().map(event => {
+                    // Fix timezone for offline events
+                    const startTime = event.start.toLocaleString(undefined, {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true
+                    });
+                    const endTime = event.end.toLocaleString(undefined, {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true
+                    });
                     return `
                         <div class="offline-log">
                             <strong>⚠️ Device went offline</strong><br>
-                            From: ${event.start.toLocaleString()}<br>
-                            To: ${event.end.toLocaleString()}<br>
+                            From: ${startTime}<br>
+                            To: ${endTime}<br>
                             Duration: ${Math.round(event.duration)} minutes
                         </div>
                     `;
@@ -496,18 +580,26 @@
             }
         }
         
-        // Initialize chart
-        initChart();
-        
-        // Initial load
-        fetchStatus();
-        fetchHistory();
-        
-        // Update every 5 seconds
-        updateInterval = setInterval(() => {
+        // Wait for page to fully load before initializing chart
+        window.addEventListener('load', () => {
+            // Initialize chart
+            try {
+                initChart();
+                console.log('Chart initialized');
+            } catch (error) {
+                console.error('Error initializing chart:', error);
+            }
+            
+            // Initial load
             fetchStatus();
             fetchHistory();
-        }, 5000);
+            
+            // Update every 5 seconds
+            updateInterval = setInterval(() => {
+                fetchStatus();
+                fetchHistory();
+            }, 5000);
+        });
     </script>
 </body>
 </html>
