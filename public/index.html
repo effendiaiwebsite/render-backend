@@ -204,6 +204,91 @@
         .offline-log strong {
             color: #92400e;
         }
+        
+        .history-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f3f4f6;
+            border-radius: 10px;
+        }
+        
+        .history-controls label {
+            font-weight: 600;
+            color: #1f2937;
+            min-width: 120px;
+        }
+        
+        .slider-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .slider {
+            flex: 1;
+            height: 8px;
+            border-radius: 5px;
+            background: #d1d5db;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .slider-value {
+            min-width: 80px;
+            text-align: center;
+            font-weight: bold;
+            color: #667eea;
+            font-size: 0.9em;
+        }
+        
+        #history-container {
+            max-height: 600px;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+        
+        #history-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        #history-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        
+        #history-container::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 10px;
+        }
+        
+        #history-container::-webkit-scrollbar-thumb:hover {
+            background: #5568d3;
+        }
     </style>
 </head>
 <body>
@@ -263,6 +348,13 @@
         
         <div class="history-card">
             <h2>Recent Activity</h2>
+            <div class="history-controls">
+                <label>Scroll Timeline:</label>
+                <div class="slider-container">
+                    <input type="range" id="history-slider" class="slider" min="0" max="100" value="100" step="1">
+                    <span class="slider-value" id="slider-value">Latest</span>
+                </div>
+            </div>
             <div id="history-container">
                 <div class="loading">Loading history...</div>
             </div>
@@ -272,6 +364,8 @@
     <script>
         let updateInterval;
         let statusChart;
+        let fullHistory = []; // Store full history for slider
+        let isScrolling = false; // Flag to prevent scroll loop
         
         // Initialize chart
         function initChart() {
@@ -399,9 +493,93 @@
             }
         }
         
+        function renderHistory() {
+            const container = document.getElementById('history-container');
+            const slider = document.getElementById('history-slider');
+            const sliderValue = document.getElementById('slider-value');
+            
+            if (fullHistory.length === 0) {
+                container.innerHTML = '<div class="loading">No history available yet</div>';
+                return;
+            }
+            
+            // Display ALL history entries (reversed so most recent is at top)
+            const historyToShow = [...fullHistory].reverse();
+            container.innerHTML = historyToShow.map(item => {
+                // Fix timezone - ensure proper conversion to local time
+                const serverTime = item.server_timestamp;
+                const date = new Date(serverTime + (serverTime.includes('Z') ? '' : 'Z'));
+                const localTime = date.toLocaleString(undefined, {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true
+                });
+                const isBoot = item.is_boot === 1;
+                const isOfflineMarker = item.is_offline_marker;
+                return `
+                    <div class="history-item" data-index="${historyToShow.indexOf(item)}">
+                        <div>
+                            <div class="history-time">${localTime}</div>
+                            <div>${isOfflineMarker ? '⚠️ Device Offline' : isBoot ? '🔄 Device Booted' : '📡 Status Update'} | Uptime: ${item.uptime_formatted || 'N/A'}</div>
+                        </div>
+                        <div class="history-status ${item.status || 'offline'}">${(item.status || 'offline').toUpperCase()}</div>
+                    </div>
+                `;
+            }).join('');
+            
+            // Update slider position to scroll to the selected position
+            updateScrollPosition();
+        }
+        
+        function updateScrollPosition() {
+            const container = document.getElementById('history-container');
+            const slider = document.getElementById('history-slider');
+            const sliderValue = document.getElementById('slider-value');
+            
+            if (!container || !slider || fullHistory.length === 0) return;
+            
+            const sliderPercent = parseInt(slider.value);
+            
+            // Calculate scroll position based on slider value
+            // 0% = oldest (bottom), 100% = newest (top)
+            const maxScroll = container.scrollHeight - container.clientHeight;
+            const scrollPosition = maxScroll * (1 - sliderPercent / 100);
+            
+            isScrolling = true;
+            container.scrollTop = scrollPosition;
+            setTimeout(() => { isScrolling = false; }, 100);
+            
+            // Update label
+            if (sliderPercent === 100) {
+                sliderValue.textContent = 'Latest';
+            } else if (sliderPercent === 0) {
+                sliderValue.textContent = 'Oldest';
+            } else {
+                // Show approximate time position
+                const totalEntries = fullHistory.length;
+                const entryIndex = Math.floor((sliderPercent / 100) * totalEntries);
+                const entry = fullHistory[fullHistory.length - 1 - entryIndex];
+                if (entry && entry.server_timestamp) {
+                    const date = new Date(entry.server_timestamp + (entry.server_timestamp.includes('Z') ? '' : 'Z'));
+                    const timeStr = date.toLocaleTimeString(undefined, {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true
+                    });
+                    sliderValue.textContent = timeStr;
+                } else {
+                    sliderValue.textContent = `${sliderPercent}%`;
+                }
+            }
+        }
+        
         async function fetchHistory() {
             try {
-                const response = await fetch('/api/history?limit=200');
+                const response = await fetch('/api/history?limit=500');
                 const history = await response.json();
                 
                 const container = document.getElementById('history-container');
@@ -419,14 +597,26 @@
                 
                 console.log('Fetched history:', history.length, 'items');
                 
+                // Store full history for slider
+                fullHistory = history;
+                
                 // Update chart with history data (await to ensure current status is fetched)
                 updateChart(history).catch(err => console.error('Chart update error:', err));
                 
                 // Detect offline events
                 detectOfflineEvents(history);
                 
-                // Display recent history
-                container.innerHTML = history.slice(0, 20).map(item => {
+                // Display history (all entries)
+                renderHistory();
+                
+                // Scroll to latest position after a short delay to ensure DOM is ready
+                setTimeout(() => {
+                    const container = document.getElementById('history-container');
+                    if (container) {
+                        container.scrollTop = 0; // Most recent is at top after reverse()
+                        updateScrollPosition();
+                    }
+                }, 100);
                     // Fix timezone - ensure proper conversion to local time
                     const serverTime = item.server_timestamp;
                     const date = new Date(serverTime + (serverTime.includes('Z') ? '' : 'Z'));
@@ -575,7 +765,7 @@
             }
         }
         
-        function detectOfflineEvents(history) {
+        async function detectOfflineEvents(history) {
             const offlineEvents = [];
             
             // Sort by timestamp - fix timezone conversion
@@ -585,6 +775,45 @@
                 return new Date(timeA) - new Date(timeB);
             });
             
+            if (sortedHistory.length === 0) {
+                displayOfflineEvents([]);
+                return;
+            }
+            
+            let offlineStart = null;
+            let lastStatus = null;
+            
+            // First pass: detect offline markers and status changes
+            for (let i = 0; i < sortedHistory.length; i++) {
+                const item = sortedHistory[i];
+                const itemTime = item.server_timestamp + (item.server_timestamp.includes('Z') ? '' : 'Z');
+                const itemDate = new Date(itemTime);
+                const isOfflineMarker = item.is_offline_marker === true;
+                const isOffline = isOfflineMarker || item.status === 'offline';
+                const isOnline = !isOffline && (item.status === 'online' || (!item.is_offline_marker && item.status !== 'offline'));
+                
+                // Detect transition from online to offline
+                if (isOffline && (lastStatus === 'online' || lastStatus === null)) {
+                    offlineStart = itemDate;
+                }
+                
+                // Detect transition from offline to online
+                if (isOnline && offlineStart !== null) {
+                    const duration = (itemDate - offlineStart) / 1000 / 60;
+                    if (duration > 0.5) { // Only record if offline for at least 30 seconds
+                        offlineEvents.push({
+                            start: offlineStart,
+                            end: itemDate,
+                            duration: duration
+                        });
+                    }
+                    offlineStart = null;
+                }
+                
+                lastStatus = isOffline ? 'offline' : 'online';
+            }
+            
+            // Second pass: detect gaps between consecutive entries (fallback for missed transitions)
             for (let i = 0; i < sortedHistory.length - 1; i++) {
                 const currentTime = sortedHistory[i].server_timestamp + (sortedHistory[i].server_timestamp.includes('Z') ? '' : 'Z');
                 const nextTime = sortedHistory[i + 1].server_timestamp + (sortedHistory[i + 1].server_timestamp.includes('Z') ? '' : 'Z');
@@ -592,23 +821,92 @@
                 const next = new Date(nextTime);
                 const gapMinutes = (next - current) / 1000 / 60;
                 
-                // If gap is more than 1 minute, it's an offline period
+                // If gap is more than 1 minute, it's likely an offline period
                 if (gapMinutes > 1) {
-                    offlineEvents.push({
-                        start: current,
-                        end: next,
-                        duration: gapMinutes
+                    // Check if we already have an event covering this period
+                    const alreadyCovered = offlineEvents.some(event => {
+                        return (current >= event.start && current <= event.end) ||
+                               (next >= event.start && next <= event.end);
                     });
+                    
+                    if (!alreadyCovered) {
+                        offlineEvents.push({
+                            start: current,
+                            end: next,
+                            duration: gapMinutes
+                        });
+                    }
+                }
+            }
+            
+            // Check if device is currently offline (no end time yet)
+            try {
+                const statusResponse = await fetch('/api/status');
+                const currentStatus = await statusResponse.json();
+                
+                if (currentStatus.status === 'offline') {
+                    // Find the last known offline start time
+                    const lastOfflineEntry = sortedHistory
+                        .filter(item => item.is_offline_marker || item.status === 'offline')
+                        .sort((a, b) => {
+                            const timeA = a.server_timestamp + (a.server_timestamp.includes('Z') ? '' : 'Z');
+                            const timeB = b.server_timestamp + (b.server_timestamp.includes('Z') ? '' : 'Z');
+                            return new Date(timeB) - new Date(timeA);
+                        })[0];
+                    
+                    if (lastOfflineEntry) {
+                        const lastOfflineTime = lastOfflineEntry.server_timestamp + (lastOfflineEntry.server_timestamp.includes('Z') ? '' : 'Z');
+                        const lastOfflineDate = new Date(lastOfflineTime);
+                        const now = new Date();
+                        const duration = (now - lastOfflineDate) / 1000 / 60;
+                        
+                        // Check if this ongoing offline event is already recorded
+                        const ongoingExists = offlineEvents.some(event => 
+                            event.ongoing === true || 
+                            (Math.abs(event.start - lastOfflineDate) < 60000 && event.end >= now)
+                        );
+                        
+                        if (!ongoingExists && duration > 0.5) {
+                            offlineEvents.push({
+                                start: lastOfflineDate,
+                                end: now,
+                                duration: duration,
+                                ongoing: true
+                            });
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('Error fetching current status for offline detection:', err);
+            }
+            
+            // Sort events by start time (most recent first)
+            offlineEvents.sort((a, b) => b.start - a.start);
+            
+            // Remove duplicates (events that overlap significantly)
+            const uniqueEvents = [];
+            for (const event of offlineEvents) {
+                const isDuplicate = uniqueEvents.some(existing => {
+                    const timeDiff = Math.abs(existing.start - event.start);
+                    return timeDiff < 60000; // Within 1 minute
+                });
+                if (!isDuplicate) {
+                    uniqueEvents.push(event);
                 }
             }
             
             // Display offline events
+            displayOfflineEvents(uniqueEvents);
+        }
+        
+        function displayOfflineEvents(offlineEvents) {
+            
             const container = document.getElementById('offline-events-container');
             const card = document.getElementById('offline-events-card');
             
             if (offlineEvents.length > 0) {
                 card.style.display = 'block';
-                container.innerHTML = offlineEvents.slice(-10).reverse().map(event => {
+                container.innerHTML = offlineEvents.slice(0, 10).map(event => {
                     // Fix timezone for offline events
                     const startTime = event.start.toLocaleString(undefined, {
                         year: 'numeric',
@@ -628,12 +926,15 @@
                         second: '2-digit',
                         hour12: true
                     });
+                    const durationText = event.ongoing 
+                        ? `${Math.round(event.duration)} minutes (ongoing)`
+                        : `${Math.round(event.duration)} minutes`;
                     return `
                         <div class="offline-log">
                             <strong>⚠️ Device went offline</strong><br>
                             From: ${startTime}<br>
                             To: ${endTime}<br>
-                            Duration: ${Math.round(event.duration)} minutes
+                            Duration: ${durationText}
                         </div>
                     `;
                 }).join('');
@@ -655,6 +956,35 @@
             // Initial load
             fetchStatus();
             fetchHistory();
+            
+            // Slider event listener for scrolling
+            const slider = document.getElementById('history-slider');
+            if (slider) {
+                slider.addEventListener('input', () => {
+                    updateScrollPosition();
+                });
+            }
+            
+            // Also update slider value when container scrolls (sync slider display)
+            const container = document.getElementById('history-container');
+            if (container) {
+                container.addEventListener('scroll', () => {
+                    if (!isScrolling && container.scrollHeight > container.clientHeight) {
+                        const scrollPercent = (container.scrollTop / (container.scrollHeight - container.clientHeight)) * 100;
+                        const sliderPercent = 100 - scrollPercent; // Invert: top = 100%, bottom = 0%
+                        slider.value = Math.round(sliderPercent);
+                        // Just update the label, don't trigger scroll
+                        const sliderValue = document.getElementById('slider-value');
+                        if (sliderPercent === 100) {
+                            sliderValue.textContent = 'Latest';
+                        } else if (sliderPercent === 0) {
+                            sliderValue.textContent = 'Oldest';
+                        } else {
+                            sliderValue.textContent = `${Math.round(sliderPercent)}%`;
+                        }
+                    }
+                });
+            }
             
             // Update every 5 seconds
             updateInterval = setInterval(() => {

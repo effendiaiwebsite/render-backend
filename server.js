@@ -137,7 +137,7 @@ app.get('/api/status', (req, res) => {
 
 // API Endpoint: Get status history
 app.get('/api/history', (req, res) => {
-  const limit = parseInt(req.query.limit) || 100;
+  const limit = parseInt(req.query.limit) || 500;
   
   db.all(`SELECT * FROM status_updates 
           ORDER BY server_timestamp DESC 
@@ -219,6 +219,33 @@ setInterval(() => {
     });
   });
 }, 60000); // Check every 60 seconds (1 minute)
+
+// Background task: Clean up old data (keep last 7 days or 2000 entries, whichever is more)
+setInterval(() => {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  
+  // Delete entries older than 7 days
+  db.run(`DELETE FROM status_updates 
+          WHERE server_timestamp < ?`, [sevenDaysAgo], (err) => {
+    if (err) {
+      console.error('Error cleaning up old data:', err);
+    } else {
+      // Also limit to max 2000 entries if somehow we have more
+      db.run(`DELETE FROM status_updates 
+              WHERE id NOT IN (
+                SELECT id FROM status_updates 
+                ORDER BY server_timestamp DESC 
+                LIMIT 2000
+              )`, (err2) => {
+        if (err2) {
+          console.error('Error limiting entries:', err2);
+        } else {
+          console.log('✅ Cleaned up old status updates (kept last 7 days or 2000 entries)');
+        }
+      });
+    }
+  });
+}, 3600000); // Run cleanup every hour
 
 // Start server
 app.listen(PORT, () => {
