@@ -15,14 +15,16 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // Initialize SQLite database
-// For Render: Use file-based database (persists during service lifetime)
-// Note: On free tier, data may be lost if service is stopped for extended period
-// For production, use PostgreSQL (see instructions below)
+// IMPORTANT: On Render free tier, the filesystem is EPHEMERAL
+// This means data is LOST when the service restarts or spins down
+// For persistent storage, use PostgreSQL (see DATABASE_OPTIONS.md)
+
+// Try to use persistent location, but it will still be lost on restart on free tier
 const db = new sqlite3.Database('monitor.db', (err) => {
   if (err) {
     console.error('Error opening database:', err);
   } else {
-    console.log('Database connected');
+    console.log('Database connected (NOTE: Data will be lost on service restart on free tier)');
   }
 });
 
@@ -188,9 +190,40 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Background task: Check for offline devices every minute
+setInterval(() => {
+  db.all(`SELECT * FROM devices`, (err, devices) => {
+    if (err) {
+      console.error('Error checking devices:', err);
+      return;
+    }
+    
+    devices.forEach(device => {
+      const lastSeen = new Date(device.last_seen);
+      const now = new Date();
+      const minutesSinceLastSeen = (now - lastSeen) / 1000 / 60;
+      
+      // If no update in 1+ minute and currently marked as online, mark as offline
+      if (minutesSinceLastSeen >= 1 && device.status === 'online') {
+        console.log(`⚠️ Device ${device.device_id} detected OFFLINE (no update for ${Math.round(minutesSinceLastSeen)} minutes)`);
+        db.run(`UPDATE devices SET status = 'offline' WHERE device_id = ?`, [device.device_id]);
+        
+        // Insert offline marker into status_updates for graph
+        db.run(`INSERT INTO status_updates 
+                (device_id, status, uptime_seconds, ip_address, rssi, free_heap, is_boot, timestamp, server_timestamp)
+                VALUES (?, 'offline', 0, '', 0, 0, 0, ?, CURRENT_TIMESTAMP)`,
+                [device.device_id, Date.now()], (err) => {
+          if (err) console.error('Error inserting offline marker:', err);
+        });
+      }
+    });
+  });
+}, 60000); // Check every 60 seconds (1 minute)
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Access the dashboard at: http://localhost:${PORT}`);
+  console.log(`Offline detection: Checking every 60 seconds`);
 });
 

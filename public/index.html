@@ -496,76 +496,80 @@
                 
                 console.log('Recent history for chart:', recentHistory.length, 'items');
                 
-                // Create time buckets (every 30 minutes for last 24 hours = 48 points)
+                // Create time buckets - use actual data points, not fixed intervals
+                // Sort history by time
+                const sortedHistory = [...recentHistory].sort((a, b) => {
+                    const timeA = (a.server_timestamp.includes('Z') ? a.server_timestamp : a.server_timestamp + 'Z');
+                    const timeB = (b.server_timestamp.includes('Z') ? b.server_timestamp : b.server_timestamp + 'Z');
+                    return new Date(timeA) - new Date(timeB);
+                });
+                
+                // Create data points: for each status update, determine if online (1) or offline (0)
                 const labels = [];
                 const data = [];
                 const colors = [];
                 
-                for (let i = 47; i >= 0; i--) {
-                    const time = new Date(now - i * 30 * 60 * 1000); // 30 minute intervals
-                    const timeLabel = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    labels.push(timeLabel);
+                // Process each history item
+                sortedHistory.forEach((item, index) => {
+                    if (!item.server_timestamp) return;
                     
-                    // Check if there's data in this 30-minute window
-                    const windowStart = new Date(time);
-                    windowStart.setSeconds(0, 0);
-                    const windowEnd = new Date(windowStart);
-                    windowEnd.setMinutes(windowEnd.getMinutes() + 30);
-                    
-                    let status = null;
-                    
-                    // Check recent history for this time window
-                    for (const item of recentHistory) {
-                        if (!item.server_timestamp) continue;
-                        try {
-                            const itemTime = item.server_timestamp.includes('Z') ? item.server_timestamp : item.server_timestamp + 'Z';
-                            const itemDate = new Date(itemTime);
-                            
-                            if (!isNaN(itemDate.getTime()) && itemDate >= windowStart && itemDate < windowEnd) {
-                                if (item.is_offline_marker || item.status === 'offline') {
-                                    status = 0; // Offline
-                                    break;
-                                } else if (item.status === 'online') {
-                                    status = 1; // Online
-                                    break;
-                                }
-                            }
-                        } catch (e) {
-                            // Skip invalid dates
+                    try {
+                        const itemTime = item.server_timestamp.includes('Z') ? item.server_timestamp : item.server_timestamp + 'Z';
+                        const itemDate = new Date(itemTime);
+                        
+                        if (isNaN(itemDate.getTime())) return;
+                        
+                        // Create label
+                        const timeLabel = itemDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        labels.push(timeLabel);
+                        
+                        // Determine status: 1 = online, 0 = offline
+                        let status = 1; // Default to online
+                        if (item.is_offline_marker || item.status === 'offline') {
+                            status = 0; // Offline
                         }
+                        
+                        data.push(status);
+                        
+                        // Set color
+                        if (status === 1) {
+                            colors.push('rgba(16, 185, 129, 0.4)'); // Green
+                        } else {
+                            colors.push('rgba(239, 68, 68, 0.4)'); // Red
+                        }
+                    } catch (e) {
+                        console.error('Error processing history item:', e);
                     }
-                    
-                    // For the most recent window, use current status
-                    if (status === null && i === 0) {
-                        status = currentStatusIsOffline ? 0 : 1;
-                    }
-                    
-                    // If still no data, mark oldest periods as offline
-                    if (status === null) {
-                        status = (i >= 45) ? 0 : 0.5; // 0.5 = unknown/gray
-                    }
-                    
-                    data.push(status);
-                    
-                    // Set color based on status
-                    if (status === 1) {
-                        colors.push('rgba(16, 185, 129, 0.4)'); // Green for online
-                    } else if (status === 0) {
-                        colors.push('rgba(239, 68, 68, 0.4)'); // Red for offline
-                    } else {
-                        colors.push('rgba(156, 163, 175, 0.2)'); // Gray for unknown
-                    }
+                });
+                
+                // Add current status if not in history
+                if (labels.length === 0 || (currentStatusIsOffline && data[data.length - 1] !== 0) || (!currentStatusIsOffline && data[data.length - 1] !== 1)) {
+                    labels.push(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                    data.push(currentStatusIsOffline ? 0 : 1);
+                    colors.push(currentStatusIsOffline ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)');
+                }
+                
+                // Limit to last 100 points for performance
+                if (labels.length > 100) {
+                    const start = labels.length - 100;
+                    labels.splice(0, start);
+                    data.splice(0, start);
+                    colors.splice(0, start);
                 }
                 
                 // Update chart
-                statusChart.data.labels = labels;
-                statusChart.data.datasets[0].data = data;
-                statusChart.data.datasets[0].backgroundColor = colors;
-                statusChart.data.datasets[0].borderColor = '#10b981';
-                statusChart.update();
-                
-                const validDataPoints = data.filter(d => d !== null && d !== 0.5).length;
-                console.log('Chart updated with', validDataPoints, 'valid data points out of', data.length);
+                if (labels.length > 0 && data.length > 0) {
+                    statusChart.data.labels = labels;
+                    statusChart.data.datasets[0].data = data;
+                    statusChart.data.datasets[0].backgroundColor = colors;
+                    statusChart.data.datasets[0].borderColor = '#10b981';
+                    statusChart.data.datasets[0].pointRadius = 3;
+                    statusChart.data.datasets[0].pointHoverRadius = 5;
+                    statusChart.update();
+                    console.log('Chart updated:', data.length, 'points | Online (1):', data.filter(d => d === 1).length, '| Offline (0):', data.filter(d => d === 0).length);
+                } else {
+                    console.log('No data points to display in chart');
+                }
             } catch (error) {
                 console.error('Error updating chart:', error);
             }
