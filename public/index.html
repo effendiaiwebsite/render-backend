@@ -634,30 +634,6 @@
                         }
                     }
                 }, 100);
-                    // Fix timezone - ensure proper conversion to local time
-                    const serverTime = item.server_timestamp;
-                    const date = new Date(serverTime + (serverTime.includes('Z') ? '' : 'Z'));
-                    const localTime = date.toLocaleString(undefined, {
-                        year: 'numeric',
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                        hour12: true
-                    });
-                    const isBoot = item.is_boot === 1;
-                    const isOfflineMarker = item.is_offline_marker;
-                    return `
-                        <div class="history-item">
-                            <div>
-                                <div class="history-time">${localTime}</div>
-                                <div>${isOfflineMarker ? '⚠️ Device Offline' : isBoot ? '🔄 Device Booted' : '📡 Status Update'} | Uptime: ${item.uptime_formatted || 'N/A'}</div>
-                            </div>
-                            <div class="history-status ${item.status || 'offline'}">${(item.status || 'offline').toUpperCase()}</div>
-                        </div>
-                    `;
-                }).join('');
             } catch (error) {
                 console.error('Error fetching history:', error);
             }
